@@ -1,0 +1,136 @@
+"""Visualization helpers for experiment trends."""
+
+from __future__ import annotations
+
+import os
+from collections import defaultdict
+from typing import Dict, Iterable, List, Tuple
+
+import matplotlib.pyplot as plt
+
+from .models import ExperimentResult
+
+
+class Plotter:
+    """Generate plots for hit/miss rates vs block size and associativity."""
+
+    def __init__(self, output_dir: str) -> None:
+        self.output_dir = output_dir
+        os.makedirs(output_dir, exist_ok=True)
+
+    def generate_all(
+        self,
+        results: Iterable[ExperimentResult],
+        hit_vs_block_name: str,
+        miss_vs_block_name: str,
+        hit_vs_assoc_name: str,
+        miss_vs_assoc_name: str,
+    ) -> Dict[str, str]:
+        items = list(results)
+        outputs: Dict[str, str] = {}
+
+        outputs["hit_vs_block"] = self.plot_block_metric(
+            items,
+            metric="hit",
+            output_name=hit_vs_block_name,
+            title="Block Size vs Hit Rate",
+        )
+        outputs["miss_vs_block"] = self.plot_block_metric(
+            items,
+            metric="miss",
+            output_name=miss_vs_block_name,
+            title="Block Size vs Miss Rate",
+        )
+        outputs["hit_vs_assoc"] = self.plot_assoc_metric(
+            items,
+            metric="hit",
+            output_name=hit_vs_assoc_name,
+            title="Associativity vs Hit Rate",
+        )
+        outputs["miss_vs_assoc"] = self.plot_assoc_metric(
+            items,
+            metric="miss",
+            output_name=miss_vs_assoc_name,
+            title="Associativity vs Miss Rate",
+        )
+
+        return outputs
+
+    def plot_block_metric(
+        self,
+        results: List[ExperimentResult],
+        metric: str,
+        output_name: str,
+        title: str,
+    ) -> str:
+        series = _group_by_assoc(results, metric)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for assoc, points in sorted(series.items()):
+            xs, ys = _sorted_points(points)
+            ax.plot(xs, ys, marker="o", label=f"{assoc}-way")
+
+        ax.set_title(title)
+        ax.set_xlabel("Block Size (KB)")
+        ax.set_ylabel("Rate")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend()
+
+        path = os.path.join(self.output_dir, output_name)
+        fig.tight_layout()
+        fig.savefig(path)
+        plt.close(fig)
+        return path
+
+    def plot_assoc_metric(
+        self,
+        results: List[ExperimentResult],
+        metric: str,
+        output_name: str,
+        title: str,
+    ) -> str:
+        series = _group_by_block(results, metric)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        for block, points in sorted(series.items()):
+            xs, ys = _sorted_points(points)
+            ax.plot(xs, ys, marker="s", label=f"{block} KB block")
+
+        ax.set_title(title)
+        ax.set_xlabel("Associativity (ways)")
+        ax.set_ylabel("Rate")
+        ax.grid(True, linestyle=":", alpha=0.5)
+        ax.legend()
+
+        path = os.path.join(self.output_dir, output_name)
+        fig.tight_layout()
+        fig.savefig(path)
+        plt.close(fig)
+        return path
+
+
+def _group_by_assoc(
+    results: List[ExperimentResult],
+    metric: str,
+) -> Dict[int, List[Tuple[int, float]]]:
+    grouped: Dict[int, List[Tuple[int, float]]] = defaultdict(list)
+    for result in results:
+        value = result.counters.hit_rate if metric == "hit" else result.counters.miss_rate
+        grouped[result.key.associativity].append((result.key.block_size_kb, value))
+    return grouped
+
+
+def _group_by_block(
+    results: List[ExperimentResult],
+    metric: str,
+) -> Dict[int, List[Tuple[int, float]]]:
+    grouped: Dict[int, List[Tuple[int, float]]] = defaultdict(list)
+    for result in results:
+        value = result.counters.hit_rate if metric == "hit" else result.counters.miss_rate
+        grouped[result.key.block_size_kb].append((result.key.associativity, value))
+    return grouped
+
+
+def _sorted_points(points: List[Tuple[int, float]]) -> Tuple[List[int], List[float]]:
+    points = sorted(points, key=lambda item: item[0])
+    return [x for x, _ in points], [y for _, y in points]
