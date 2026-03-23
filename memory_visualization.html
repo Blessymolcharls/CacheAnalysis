@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Memory Access Visualization</title>
+
+<style>
+body {
+  font-family: Arial, sans-serif;
+  padding: 20px;
+  background: #f5f5f5;
+}
+
+h1 {
+  text-align: center;
+}
+
+.section {
+  margin-top: 30px;
+}
+
+.mem-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.mem-cell {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: #ddd;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: bold;
+  transition: 0.3s;
+}
+
+.active {
+  background: #ff7a00;
+  color: white;
+}
+
+.title {
+  font-weight: bold;
+  margin-bottom: 5px;
+}
+</style>
+
+</head>
+<body>
+
+<h1>Memory Access Visualization</h1>
+
+<div class="section">
+  <div class="title">Sequential Access</div>
+  <div id="seq" class="mem-row"></div>
+</div>
+
+<div class="section">
+  <div class="title">Stride Access (stride = 3)</div>
+  <div id="stride" class="mem-row"></div>
+</div>
+
+<div class="section">
+  <div class="title">Random Access</div>
+  <div id="random" class="mem-row"></div>
+</div>
+
+<script>
+
+// Create memory blocks
+function createBlocks(containerId) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = "";
+
+  for (let i = 0; i < 12; i++) {
+    const cell = document.createElement("div");
+    cell.className = "mem-cell";
+    cell.innerText = i;
+    container.appendChild(cell);
+  }
+}
+
+// Sequential Access
+function seqAccess() {
+  createBlocks("seq");
+
+  let i = 0;
+  setInterval(() => {
+    const cells = document.querySelectorAll("#seq .mem-cell");
+    cells.forEach(c => c.classList.remove("active"));
+
+    cells[i].classList.add("active");
+    i = (i + 1) % cells.length;
+  }, 400);
+}
+
+// Stride Access
+function strideAccess() {
+  createBlocks("stride");
+
+  let i = 0;
+  const stride = 3;
+
+  setInterval(() => {
+    const cells = document.querySelectorAll("#stride .mem-cell");
+    cells.forEach(c => c.classList.remove("active"));
+
+    cells[i].classList.add("active");
+    i = (i + stride) % cells.length;
+  }, 500);
+}
+
+// Random Access
+function randomAccess() {
+  createBlocks("random");
+
+  setInterval(() => {
+    const cells = document.querySelectorAll("#random .mem-cell");
+    cells.forEach(c => c.classList.remove("active"));
+
+    const rand = Math.floor(Math.random() * cells.length);
+    cells[rand].classList.add("active");
+  }, 500);
+}
+
+// Run all
+seqAccess();
+strideAccess();
+randomAccess();
+
+</script>
+
+</body>
+</html>
