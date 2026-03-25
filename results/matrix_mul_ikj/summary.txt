@@ -1,0 +1,27 @@
+Cache Simulation Summary
+================================================================================
+
+Total configurations: 12
+  Successful: 12
+  Failed:     0
+
+Workload: matrix_mul_ikj
+--------------------------------------------------------------------------------
+Block=64B | Assoc=1-way | Accesses=33938114 | Hits=32181243 | Misses=1756871 | HitRate=0.948233 | MissRate=0.051767
+Block=64B | Assoc=2-way | Accesses=33938114 | Hits=32846602 | Misses=1091512 | HitRate=0.967838 | MissRate=0.032162
+Block=64B | Assoc=4-way | Accesses=33938114 | Hits=32862952 | Misses=1075162 | HitRate=0.968320 | MissRate=0.031680
+Block=64B | Assoc=8-way | Accesses=33938114 | Hits=32862993 | Misses=1075121 | HitRate=0.968321 | MissRate=0.031679
+Block=128B | Assoc=1-way | Accesses=33938106 | Hits=32623746 | Misses=1314360 | HitRate=0.961272 | MissRate=0.038728
+Block=128B | Assoc=2-way | Accesses=33938106 | Hits=33372030 | Misses=566076 | HitRate=0.983320 | MissRate=0.016680
+Block=128B | Assoc=4-way | Accesses=33938106 | Hits=33399550 | Misses=538556 | HitRate=0.984131 | MissRate=0.015869
+Block=128B | Assoc=8-way | Accesses=33938106 | Hits=33399603 | Misses=538503 | HitRate=0.984133 | MissRate=0.015867
+Block=256B | Assoc=1-way | Accesses=33938105 | Hits=32753542 | Misses=1184563 | HitRate=0.965096 | MissRate=0.034904
+Block=256B | Assoc=2-way | Accesses=33938105 | Hits=33623123 | Misses=314982 | HitRate=0.990719 | MissRate=0.009281
+Block=256B | Assoc=4-way | Accesses=33938105 | Hits=33668133 | Misses=269972 | HitRate=0.992045 | MissRate=0.007955
+Block=256B | Assoc=8-way | Accesses=33938105 | Hits=33668189 | Misses=269916 | HitRate=0.992047 | MissRate=0.007953
+
+Key Insight Targets
+--------------------------------------------------------------------------------
+1. Hit rate often increases with block size initially, then may saturate.
+2. Miss rate often decreases initially, but may rise if conflicts dominate.
+3. Associativity tends to show diminishing returns beyond 4-way.

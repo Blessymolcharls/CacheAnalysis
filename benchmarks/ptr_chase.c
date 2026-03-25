@@ -168,18 +168,6 @@ static void verify_chain(void)
 
 int main(void)
 {
-    const char *mode_name = (CHAIN_MODE == 0) ? "SEQUENTIAL" : "SHUFFLED";
-    char bench_name[64];
-    snprintf(bench_name, sizeof(bench_name),
-             "POINTER-CHASE (%s chain)", mode_name);
-    print_config(bench_name, -1);
-
-    printf("  chain_length     : %d elements\n",  ARRAY_SIZE);
-    printf("  ptr_iters        : %d\n",            PTR_ITERS);
-    printf("  chain_mode       : %d (%s)\n",       CHAIN_MODE, mode_name);
-    printf("  shuffle_seed     : %u\n",             SHUFFLE_SEED);
-    printf("\n");
-
     /* ------------------------------------------------------------------
      * Phase 0 — BUILD CHAIN  (outside ROI, not timed)
      *
@@ -269,8 +257,8 @@ int main(void)
 
     ROI_END();
 
-    printf("result_sink = %ld  (correctness check — must be 0..%d)\n",
-           g_idx_sink, ARRAY_SIZE - 1);
+        printf("RESULT: pointer_chase mode=%s\n",
+            (CHAIN_MODE == 0) ? "sequential" : "shuffled");
 
     return 0;
 }

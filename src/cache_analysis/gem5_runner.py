@@ -210,7 +210,7 @@ class Gem5ExperimentRunner:
                 # ----------------------------------------------------------
                 key = ExperimentKey(
                     cache_size_kb=geometry.cache_size_kb,
-                    block_size_kb=geometry.block_size_kb,
+                    block_size_kb=geometry.block_size_bytes,
                     block_size_bytes=geometry.block_size_bytes,
                     associativity=geometry.associativity,
                     replacement_policy=self.config.replacement_policy,
@@ -530,7 +530,7 @@ def _make_failed_result(
     stderr_snippet = _read_stderr_snippet(run_dir)
     key = ExperimentKey(
         cache_size_kb=geometry.cache_size_kb,
-        block_size_kb=geometry.block_size_kb,
+        block_size_kb=geometry.block_size_bytes,
         block_size_bytes=geometry.block_size_bytes,
         associativity=geometry.associativity,
         replacement_policy=config.replacement_policy,

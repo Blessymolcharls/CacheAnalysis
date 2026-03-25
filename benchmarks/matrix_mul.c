@@ -1,5 +1,4 @@
 #include <errno.h>
-#include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -8,24 +7,26 @@
 
 #define ALIGNMENT 64ULL
 #define DEFAULT_MATRIX_KB 1024ULL
-#define DEFAULT_TILE 32ULL
-#define DEFAULT_PASSES 3U
-#define DEFAULT_STRIDE 4ULL
+#define DEFAULT_TILE 32U
+#define DEFAULT_WARMUP_PASSES 1U
+#define DEFAULT_ROI_PASSES 3U
 #define MIN_DIM 32U
 
-typedef struct {
-    uint64_t accesses;
-    uint64_t reads;
-    uint64_t writes;
-    double checksum;
-} PatternStats;
+#ifdef GEM5
+#include <gem5/m5ops.h>
+#define ROI_BEGIN() do { m5_reset_stats(0, 0); } while (0)
+#define ROI_END() do { m5_dump_stats(0, 0); } while (0)
+#else
+#define ROI_BEGIN() do { } while (0)
+#define ROI_END() do { } while (0)
+#endif
 
-typedef struct {
-    uint64_t total_accesses;
-    uint64_t total_reads;
-    uint64_t total_writes;
-    double checksum;
-} BenchmarkStats;
+typedef enum {
+    PATTERN_IJK = 0,
+    PATTERN_IKJ,
+    PATTERN_JKI,
+    PATTERN_BLOCKED,
+} Pattern;
 
 static volatile double global_sink = 0.0;
 
@@ -69,66 +70,34 @@ static uint32_t derive_matrix_dim_from_kb(uint64_t matrix_kb) {
     return n;
 }
 
-static void zero_matrix(double *m, uint32_t n, PatternStats *stats) {
+static void zero_matrix(double *m, uint32_t n) {
     uint64_t i;
     uint64_t total = (uint64_t)n * (uint64_t)n;
     for (i = 0ULL; i < total; ++i) {
         m[i] = 0.0;
-        stats->writes += 1ULL;
-        stats->accesses += 1ULL;
     }
 }
 
-static void init_matrix_a(double *a, uint32_t n, PatternStats *stats) {
+static void init_matrix_a(double *a, uint32_t n) {
     uint32_t i;
     for (i = 0U; i < n; ++i) {
         uint32_t j;
         for (j = 0U; j < n; ++j) {
             double v = (double)(i * 131U + j * 17U) / (double)(n + 1U);
             a[(uint64_t)i * n + j] = v;
-            stats->writes += 1ULL;
-            stats->accesses += 1ULL;
         }
     }
 }
 
-static void init_matrix_b(double *b, uint32_t n, PatternStats *stats) {
+static void init_matrix_b(double *b, uint32_t n) {
     uint32_t i;
     for (i = 0U; i < n; ++i) {
         uint32_t j;
         for (j = 0U; j < n; ++j) {
             double v = (double)((i ^ j) + 3U) / (double)(j + 1U);
             b[(uint64_t)i * n + j] = v;
-            stats->writes += 1ULL;
-            stats->accesses += 1ULL;
         }
     }
-}
-
-static void copy_matrix(double *dst, const double *src, uint32_t n, PatternStats *stats) {
-    uint64_t i;
-    uint64_t total = (uint64_t)n * (uint64_t)n;
-    for (i = 0ULL; i < total; ++i) {
-        dst[i] = src[i];
-        stats->reads += 1ULL;
-        stats->writes += 1ULL;
-        stats->accesses += 2ULL;
-    }
-}
-
-static double checksum_matrix(const double *m, uint32_t n, PatternStats *stats) {
-    uint32_t i;
-    double sum = 0.0;
-    for (i = 0U; i < n; ++i) {
-        uint32_t j;
-        for (j = 0U; j < n; ++j) {
-            double v = m[(uint64_t)i * n + j];
-            sum += v;
-            stats->reads += 1ULL;
-            stats->accesses += 1ULL;
-        }
-    }
-    return sum;
 }
 
 static double multiply_ijk(
@@ -136,8 +105,7 @@ static double multiply_ijk(
     const double *b,
     double *c,
     uint32_t n,
-    uint32_t passes,
-    PatternStats *stats
+    uint32_t passes
 ) {
     uint32_t p;
     double local = 0.0;
@@ -148,19 +116,11 @@ static double multiply_ijk(
             for (j = 0U; j < n; ++j) {
                 uint32_t k;
                 double sum = c[(uint64_t)i * n + j];
-                stats->reads += 1ULL;
-                stats->accesses += 1ULL;
                 for (k = 0U; k < n; ++k) {
-                    double av = a[(uint64_t)i * n + k];
-                    double bv = b[(uint64_t)k * n + j];
-                    sum += av * bv;
-                    stats->reads += 2ULL;
-                    stats->accesses += 2ULL;
+                    sum += a[(uint64_t)i * n + k] * b[(uint64_t)k * n + j];
                 }
                 c[(uint64_t)i * n + j] = sum;
-                stats->writes += 1ULL;
-                stats->accesses += 1ULL;
-                local += sum * 1e-9;
+                local += sum * 1e-12;
             }
         }
     }
@@ -172,8 +132,7 @@ static double multiply_ikj(
     const double *b,
     double *c,
     uint32_t n,
-    uint32_t passes,
-    PatternStats *stats
+    uint32_t passes
 ) {
     uint32_t p;
     double local = 0.0;
@@ -184,16 +143,11 @@ static double multiply_ikj(
             for (k = 0U; k < n; ++k) {
                 double aik = a[(uint64_t)i * n + k];
                 uint32_t j;
-                stats->reads += 1ULL;
-                stats->accesses += 1ULL;
                 for (j = 0U; j < n; ++j) {
                     uint64_t idx = (uint64_t)i * n + j;
                     double val = c[idx] + aik * b[(uint64_t)k * n + j];
                     c[idx] = val;
-                    stats->reads += 2ULL;
-                    stats->writes += 1ULL;
-                    stats->accesses += 3ULL;
-                    local += val * 1e-10;
+                    local += val * 1e-12;
                 }
             }
         }
@@ -206,8 +160,7 @@ static double multiply_jki(
     const double *b,
     double *c,
     uint32_t n,
-    uint32_t passes,
-    PatternStats *stats
+    uint32_t passes
 ) {
     uint32_t p;
     double local = 0.0;
@@ -218,16 +171,11 @@ static double multiply_jki(
             for (k = 0U; k < n; ++k) {
                 double bkj = b[(uint64_t)k * n + j];
                 uint32_t i;
-                stats->reads += 1ULL;
-                stats->accesses += 1ULL;
                 for (i = 0U; i < n; ++i) {
                     uint64_t idx = (uint64_t)i * n + j;
                     double val = c[idx] + a[(uint64_t)i * n + k] * bkj;
                     c[idx] = val;
-                    stats->reads += 2ULL;
-                    stats->writes += 1ULL;
-                    stats->accesses += 3ULL;
-                    local += val * 1e-11;
+                    local += val * 1e-12;
                 }
             }
         }
@@ -241,8 +189,7 @@ static double multiply_blocked(
     double *c,
     uint32_t n,
     uint32_t tile,
-    uint32_t passes,
-    PatternStats *stats
+    uint32_t passes
 ) {
     uint32_t p;
     double local = 0.0;
@@ -266,15 +213,10 @@ static double multiply_blocked(
                         for (k = kk; k < k_end; ++k) {
                             double aik = a[(uint64_t)i * n + k];
                             uint32_t j;
-                            stats->reads += 1ULL;
-                            stats->accesses += 1ULL;
                             for (j = jj; j < j_end; ++j) {
                                 uint64_t idx = (uint64_t)i * n + j;
                                 double val = c[idx] + aik * b[(uint64_t)k * n + j];
                                 c[idx] = val;
-                                stats->reads += 2ULL;
-                                stats->writes += 1ULL;
-                                stats->accesses += 3ULL;
                                 local += val * 1e-12;
                             }
                         }
@@ -286,121 +228,87 @@ static double multiply_blocked(
     return local;
 }
 
-static double reverse_traversal_mix(
-    double *a,
-    double *b,
-    double *c,
-    uint32_t n,
-    uint32_t passes,
-    uint32_t stride,
-    PatternStats *stats
-) {
-    uint32_t p;
-    double local = 0.0;
-    if (stride == 0U) {
-        stride = 1U;
+static Pattern parse_pattern(const char *arg, int *ok) {
+    if (arg == NULL) {
+        *ok = 0;
+        return PATTERN_IJK;
     }
-
-    for (p = 0U; p < passes; ++p) {
-        uint32_t i;
-        for (i = n; i > 0U; --i) {
-            uint32_t ii = i - 1U;
-            uint32_t j = n;
-            while (j > 0U) {
-                uint32_t jj = j - 1U;
-                uint64_t idx = (uint64_t)ii * n + jj;
-                double av = a[idx];
-                double bv = b[(uint64_t)jj * n + ii];
-                double cv = c[idx];
-                c[idx] = cv + av - bv + (double)p * 0.0001;
-                stats->reads += 3ULL;
-                stats->writes += 1ULL;
-                stats->accesses += 4ULL;
-                local += c[idx] * 1e-6;
-
-                if (j <= stride) {
-                    break;
-                }
-                j -= stride;
-            }
-        }
+    if (strcmp(arg, "ijk") == 0) {
+        *ok = 1;
+        return PATTERN_IJK;
     }
-    return local;
+    if (strcmp(arg, "ikj") == 0) {
+        *ok = 1;
+        return PATTERN_IKJ;
+    }
+    if (strcmp(arg, "jki") == 0) {
+        *ok = 1;
+        return PATTERN_JKI;
+    }
+    if (strcmp(arg, "blocked") == 0) {
+        *ok = 1;
+        return PATTERN_BLOCKED;
+    }
+    *ok = 0;
+    return PATTERN_IJK;
 }
 
-static double verify_with_reference(
+static const char *pattern_name(Pattern p) {
+    switch (p) {
+        case PATTERN_IJK:
+            return "ijk";
+        case PATTERN_IKJ:
+            return "ikj";
+        case PATTERN_JKI:
+            return "jki";
+        case PATTERN_BLOCKED:
+            return "blocked";
+        default:
+            return "unknown";
+    }
+}
+
+static double run_pattern(
+    Pattern p,
     const double *a,
     const double *b,
-    const double *c,
+    double *c,
     uint32_t n,
-    PatternStats *stats
+    uint32_t tile,
+    uint32_t passes
 ) {
-    uint32_t max_check = (n > 24U) ? 24U : n;
-    uint32_t i;
-    double err = 0.0;
-
-    for (i = 0U; i < max_check; ++i) {
-        uint32_t j;
-        for (j = 0U; j < max_check; ++j) {
-            uint32_t k;
-            double ref = 0.0;
-            for (k = 0U; k < max_check; ++k) {
-                ref += a[(uint64_t)i * n + k] * b[(uint64_t)k * n + j];
-                stats->reads += 2ULL;
-                stats->accesses += 2ULL;
-            }
-            {
-                double got = c[(uint64_t)i * n + j];
-                double diff = fabs(got - ref);
-                err += diff;
-                stats->reads += 1ULL;
-                stats->accesses += 1ULL;
-            }
-        }
+    switch (p) {
+        case PATTERN_IJK:
+            return multiply_ijk(a, b, c, n, passes);
+        case PATTERN_IKJ:
+            return multiply_ikj(a, b, c, n, passes);
+        case PATTERN_JKI:
+            return multiply_jki(a, b, c, n, passes);
+        case PATTERN_BLOCKED:
+            return multiply_blocked(a, b, c, n, tile, passes);
+        default:
+            return 0.0;
     }
-    return err;
-}
-
-static void print_pattern_result(const char *pattern, const PatternStats *stats, double checksum) {
-    printf(
-        "RESULT: pattern=%s, accesses=%" PRIu64 ", reads=%" PRIu64 ", writes=%" PRIu64 ", checksum=%.10e\n",
-        pattern,
-        stats->accesses,
-        stats->reads,
-        stats->writes,
-        checksum
-    );
-}
-
-static void accumulate_total(BenchmarkStats *total, const PatternStats *s, double checksum) {
-    total->total_accesses += s->accesses;
-    total->total_reads += s->reads;
-    total->total_writes += s->writes;
-    total->checksum += checksum;
 }
 
 static void print_usage(const char *prog) {
-    printf("Usage: %s [matrix_kb] [tile] [passes] [stride]\n", prog);
-    printf("Example: %s 1024 32 3 4\n", prog);
+    printf("Usage: %s [matrix_kb] [pattern]\n", prog);
+    printf("Patterns: ijk | ikj | jki | blocked\n");
+    printf("Example: %s 1024 blocked\n", prog);
 }
 
 int main(int argc, char **argv) {
     uint64_t matrix_kb = DEFAULT_MATRIX_KB;
-    uint64_t tile_u64 = DEFAULT_TILE;
-    uint64_t passes_u64 = DEFAULT_PASSES;
-    uint64_t stride_u64 = DEFAULT_STRIDE;
     uint32_t n;
-    uint32_t tile;
-    uint32_t passes;
-    uint32_t stride;
+    uint32_t tile = DEFAULT_TILE;
     uint64_t elements;
     double *a;
     double *b;
     double *c;
-    double *a_ref;
-    double *b_ref;
-    PatternStats init_stats = {0, 0, 0, 0.0};
-    BenchmarkStats total = {0, 0, 0, 0.0};
+    Pattern pattern;
+    int pattern_ok;
+    double warmup_acc;
+    double roi_acc;
 
     if (argc > 1 && (strcmp(argv[1], "-h") == 0 || strcmp(argv[1], "--help") == 0)) {
         print_usage(argv[0]);
@@ -410,122 +318,65 @@ int main(int argc, char **argv) {
     if (argc > 1) {
         matrix_kb = parse_u64_arg(argv[1], DEFAULT_MATRIX_KB);
     }
-    if (argc > 2) {
-        tile_u64 = parse_u64_arg(argv[2], DEFAULT_TILE);
-    }
-    if (argc > 3) {
-        passes_u64 = parse_u64_arg(argv[3], DEFAULT_PASSES);
-    }
-    if (argc > 4) {
-        stride_u64 = parse_u64_arg(argv[4], DEFAULT_STRIDE);
-    }
 
-    if (tile_u64 > 4096ULL) {
-        tile_u64 = 4096ULL;
-    }
-    if (passes_u64 > 1000ULL) {
-        passes_u64 = 1000ULL;
-    }
-    if (stride_u64 > 4096ULL) {
-        stride_u64 = 4096ULL;
+    if (argc > 2) {
+        pattern = parse_pattern(argv[2], &pattern_ok);
+        if (!pattern_ok) {
+            fprintf(stderr, "invalid pattern: %s\n", argv[2]);
+            print_usage(argv[0]);
+            return 1;
+        }
+    } else {
+        pattern = PATTERN_IJK;
     }
 
     n = derive_matrix_dim_from_kb(matrix_kb);
-    tile = (uint32_t)tile_u64;
-    passes = (uint32_t)passes_u64;
-    stride = (uint32_t)stride_u64;
+    if (tile > n) {
+        tile = n;
+    }
     elements = (uint64_t)n * (uint64_t)n;
 
     a = alloc_aligned_matrix((size_t)elements);
     b = alloc_aligned_matrix((size_t)elements);
     c = alloc_aligned_matrix((size_t)elements);
-    a_ref = alloc_aligned_matrix((size_t)elements);
-    b_ref = alloc_aligned_matrix((size_t)elements);
 
-    if (a == NULL || b == NULL || c == NULL || a_ref == NULL || b_ref == NULL) {
+    if (a == NULL || b == NULL || c == NULL) {
         fprintf(stderr, "allocation failed for matrix dimension %u\n", n);
         free(a);
         free(b);
         free(c);
-        free(a_ref);
-        free(b_ref);
         return 1;
     }
 
-    init_matrix_a(a, n, &init_stats);
-    init_matrix_b(b, n, &init_stats);
-    copy_matrix(a_ref, a, n, &init_stats);
-    copy_matrix(b_ref, b, n, &init_stats);
-    zero_matrix(c, n, &init_stats);
-    print_pattern_result("init", &init_stats, (double)init_stats.accesses);
-    accumulate_total(&total, &init_stats, (double)init_stats.accesses);
+    init_matrix_a(a, n);
+    init_matrix_b(b, n);
 
-    {
-        PatternStats s = {0, 0, 0, 0.0};
-        double cs = multiply_ijk(a, b, c, n, passes, &s);
-        print_pattern_result("matmul_ijk", &s, cs);
-        accumulate_total(&total, &s, cs);
-    }
+    /* Warm-up is intentionally outside ROI to stabilize cache/TLB state. */
+    zero_matrix(c, n);
+    warmup_acc = run_pattern(pattern, a, b, c, n, tile, DEFAULT_WARMUP_PASSES);
+    global_sink += warmup_acc;
 
-    {
-        PatternStats s = {0, 0, 0, 0.0};
-        double cs = multiply_ikj(a, b, c, n, passes, &s);
-        print_pattern_result("matmul_ikj", &s, cs);
-        accumulate_total(&total, &s, cs);
-    }
+    /* ROI contains only the selected kernel for clean cache measurements. */
+    zero_matrix(c, n);
+    ROI_BEGIN();
+    roi_acc = run_pattern(pattern, a, b, c, n, tile, DEFAULT_ROI_PASSES);
+    ROI_END();
 
-    {
-        PatternStats s = {0, 0, 0, 0.0};
-        double cs = multiply_jki(a, b, c, n, passes, &s);
-        print_pattern_result("matmul_jki", &s, cs);
-        accumulate_total(&total, &s, cs);
-    }
-
-    {
-        PatternStats s = {0, 0, 0, 0.0};
-        double cs = multiply_blocked(a, b, c, n, tile, passes, &s);
-        print_pattern_result("matmul_blocked", &s, cs);
-        accumulate_total(&total, &s, cs);
-    }
-
-    {
-        PatternStats s = {0, 0, 0, 0.0};
-        double cs = reverse_traversal_mix(a, b, c, n, passes, stride, &s);
-        print_pattern_result("reverse_strided_mix", &s, cs);
-        accumulate_total(&total, &s, cs);
-    }
-
-    {
-        PatternStats s_checksum = {0, 0, 0, 0.0};
-        PatternStats s_verify = {0, 0, 0, 0.0};
-        double cs = checksum_matrix(c, n, &s_checksum);
-        double err = verify_with_reference(a_ref, b_ref, c, n, &s_verify);
-        print_pattern_result("checksum", &s_checksum, cs);
-        print_pattern_result("verify", &s_verify, err);
-        accumulate_total(&total, &s_checksum, cs);
-        accumulate_total(&total, &s_verify, err);
-        global_sink += cs + err;
-    }
-
+    global_sink += roi_acc;
     global_sink += c[(uint64_t)(n / 2U) * n + (n / 2U)];
 
     printf(
-        "RESULT: pattern=summary, matrix_kb=%" PRIu64 ", N=%u, tile=%u, passes=%u, stride=%u, accesses=%" PRIu64 ", reads=%" PRIu64 ", writes=%" PRIu64 ", checksum=%.10e\n",
-        matrix_kb,
+        "RESULT: pattern=%s, matrix_kb=%llu, N=%u, tile=%u, passes=%u, sink=%.10e\n",
+        pattern_name(pattern),
+        (unsigned long long)matrix_kb,
         n,
         tile,
-        passes,
-        stride,
-        total.total_accesses,
-        total.total_reads,
-        total.total_writes,
-        total.checksum + global_sink
+        DEFAULT_ROI_PASSES,
+        global_sink
     );
 
     free(a);
     free(b);
     free(c);
-    free(a_ref);
-    free(b_ref);
     return 0;
 }

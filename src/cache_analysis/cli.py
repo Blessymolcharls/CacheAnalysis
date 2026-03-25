@@ -28,12 +28,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cache-size-kb", type=int, default=DEFAULT_CACHE_SIZE_KB)
     parser.add_argument(
         "--block-sizes-bytes",
-        "--block-sizes-kb",
-        dest="block_sizes_bytes",
         nargs="+",
         type=int,
         default=DEFAULT_BLOCK_SIZES_BYTES,
-        help="Space-separated list in BYTES, e.g. --block-sizes-bytes 16 32 64 128 256",
+        help="Space-separated list in BYTES, e.g. --block-sizes-bytes 64 128 256",
     )
     parser.add_argument(
         "--associativities",
@@ -102,7 +100,7 @@ def parse_config(argv: List[str] | None = None) -> ExperimentConfig:
 
     config = ExperimentConfig(
         cache_size_kb=args.cache_size_kb,
-        block_sizes_kb=list(args.block_sizes_bytes),
+        block_sizes_bytes=list(args.block_sizes_bytes),
         associativities=list(args.associativities),
         replacement_policy=args.replacement_policy,
         address_space_bits=args.address_bits,

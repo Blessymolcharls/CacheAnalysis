@@ -7,14 +7,7 @@ from dataclasses import dataclass, field
 from typing import Iterable, List
 
 DEFAULT_CACHE_SIZE_KB = 32
-# SKIP: 16B excluded — triggers AVX-VNNI (opcode 0f38/0x59) panic in gem5's
-# TimingSimpleCPU because the benchmark binary uses instructions not yet
-# implemented by this gem5 build.  Also architecturally atypical (real
-# hardware standardised on 64B blocks).  Remove this comment and add 16 back
-# once the benchmark is recompiled with -march=x86-64 (no AVX-VNNI).
-DEFAULT_BLOCK_SIZES_BYTES = [32, 64, 128, 256]
-# Backward-compatible alias used by existing imports/call sites.
-DEFAULT_BLOCK_SIZES_KB = DEFAULT_BLOCK_SIZES_BYTES
+DEFAULT_BLOCK_SIZES_BYTES = [64, 128, 256]
 DEFAULT_ASSOCIATIVITIES = [1, 2, 4, 8]
 DEFAULT_REPLACEMENT_POLICY = "LRU"
 DEFAULT_ADDRESS_SPACE_BITS = 32
@@ -26,23 +19,19 @@ class CacheGeometry:
 
     Attributes:
         cache_size_kb: Total cache capacity in KB.
-        block_size_kb: Block size in bytes (legacy field name retained).
+        block_size_bytes: Block size in bytes.
         associativity: Number of ways per set.
         address_space_bits: Width of simulated addresses.
     """
 
     cache_size_kb: int
-    block_size_kb: int
+    block_size_bytes: int
     associativity: int
     address_space_bits: int = DEFAULT_ADDRESS_SPACE_BITS
 
     @property
     def cache_size_bytes(self) -> int:
         return self.cache_size_kb * 1024
-
-    @property
-    def block_size_bytes(self) -> int:
-        return self.block_size_kb
 
     @property
     def num_blocks(self) -> int:
@@ -57,12 +46,18 @@ class CacheGeometry:
     def validate(self) -> None:
         if self.cache_size_kb <= 0:
             raise ValueError("cache_size_kb must be positive")
-        if self.block_size_kb <= 0:
-            raise ValueError("block_size_kb must be positive")
+        if self.block_size_bytes <= 0:
+            raise ValueError("block_size_bytes must be positive")
         if self.associativity <= 0:
             raise ValueError("associativity must be positive")
         if self.address_space_bits <= 0:
             raise ValueError("address_space_bits must be positive")
+
+        if self.block_size_bytes > self.cache_size_bytes:
+            raise ValueError(
+                "Block size must be <= cache size. "
+                f"block={self.block_size_bytes}, cache={self.cache_size_bytes}"
+            )
 
         if self.cache_size_bytes % self.block_size_bytes != 0:
             raise ValueError(
@@ -107,7 +102,7 @@ class ExperimentConfig:
     """Top-level configuration for full factorial gem5 experiments."""
 
     cache_size_kb: int = DEFAULT_CACHE_SIZE_KB
-    block_sizes_kb: List[int] = field(default_factory=lambda: list(DEFAULT_BLOCK_SIZES_KB))
+    block_sizes_bytes: List[int] = field(default_factory=lambda: list(DEFAULT_BLOCK_SIZES_BYTES))
     associativities: List[int] = field(default_factory=lambda: list(DEFAULT_ASSOCIATIVITIES))
     replacement_policy: str = DEFAULT_REPLACEMENT_POLICY
     address_space_bits: int = DEFAULT_ADDRESS_SPACE_BITS
@@ -118,18 +113,18 @@ class ExperimentConfig:
             raise ValueError(
                 "This framework currently supports only LRU replacement policy"
             )
-        _validate_positive_int_list("block_sizes_kb", self.block_sizes_kb)
+        _validate_positive_int_list("block_sizes_bytes", self.block_sizes_bytes)
         _validate_positive_int_list("associativities", self.associativities)
         if self.cache_size_kb <= 0:
             raise ValueError("cache_size_kb must be > 0")
         if self.address_space_bits <= 0:
             raise ValueError("address_space_bits must be > 0")
 
-        for block_kb in self.block_sizes_kb:
+        for block_bytes in self.block_sizes_bytes:
             for assoc in self.associativities:
                 geometry = CacheGeometry(
                     cache_size_kb=self.cache_size_kb,
-                    block_size_kb=block_kb,
+                    block_size_bytes=block_bytes,
                     associativity=assoc,
                     address_space_bits=self.address_space_bits,
                 )
@@ -137,11 +132,11 @@ class ExperimentConfig:
 
     def all_geometries(self) -> List[CacheGeometry]:
         geometries: List[CacheGeometry] = []
-        for block_kb in self.block_sizes_kb:
+        for block_bytes in self.block_sizes_bytes:
             for assoc in self.associativities:
                 geometry = CacheGeometry(
                     cache_size_kb=self.cache_size_kb,
-                    block_size_kb=block_kb,
+                    block_size_bytes=block_bytes,
                     associativity=assoc,
                     address_space_bits=self.address_space_bits,
                 )
@@ -196,6 +191,10 @@ class Gem5RunConfig:
             raise ValueError("workload_name must be provided")
         if self.max_ticks < 0:
             raise ValueError("max_ticks must be >= 0")
+        if self.cpu_type not in {"TimingSimpleCPU", "MinorCPU"}:
+            raise ValueError(
+                "cpu_type must be one of: TimingSimpleCPU, MinorCPU, AtomicSimpleCPU"
+            )
 
 
 def _validate_positive_int_list(name: str, values: Iterable[int]) -> None:
